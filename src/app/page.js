@@ -1,8 +1,5 @@
-export default function Home() {
-  return (
-    <main>
-      <h1>Veterinaria San Roque</h1>
-      <p>Bienvenido a nuestra veterinaria</p>
-    </main>
-  );
+import { redirect } from "next/navigation";
+
+export default function HomePage() {
+  redirect("/login");
 }

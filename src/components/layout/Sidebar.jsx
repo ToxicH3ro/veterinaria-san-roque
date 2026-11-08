@@ -63,6 +63,25 @@ export default function Sidebar() {
           📅 Agenda
         </Link>
 
+        {usuario?.rol === "usuario" && (
+          <>
+
+        <Link
+              href="/pagos"
+              className="bg-white/10 hover:bg-[#E57A3A] hover:text-[#112250] text-white font-semibold py-3 px-4 rounded-lg transition"
+            >
+              💳 Pagos
+            </Link>
+
+            <Link
+              href="/mascotas"
+              className="bg-white/10 hover:bg-[#E57A3A] hover:text-[#112250] text-white font-semibold py-3 px-4 rounded-lg transition"
+            >
+              🐾 Mascotas
+            </Link>
+        </>
+      )}
+
         {usuario?.rol === "veterinario" && (
           <>
             <Link
@@ -70,6 +89,13 @@ export default function Sidebar() {
               className="bg-white/10 hover:bg-[#E57A3A] hover:text-[#112250] text-white font-semibold py-3 px-4 rounded-lg transition"
             >
               👥 Clientes
+            </Link>
+
+            <Link
+              href="/pacientes"
+              className="bg-white/10 hover:bg-[#E57A3A] hover:text-[#112250] text-white font-semibold py-3 px-4 rounded-lg transition"
+            >
+              🐾 Pacientes
             </Link>
 
             <p className="text-sm font-semibold uppercase text-white/60 mt-4 mb-1">

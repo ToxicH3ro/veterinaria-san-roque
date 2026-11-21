@@ -7,37 +7,77 @@ import {
   obtenerDatosClientes,
   obtenerDatosFacturas,
   obtenerDatosInventario,
+  observarDatosPagos,
 } from "@/services/reportesService";
 
+// =========================================
+// CONVERTIR FECHAS DE FIRESTORE
+// =========================================
+
+const convertirFecha = (fecha) => {
+  if (!fecha) return null;
+
+  if (typeof fecha.toDate === "function") {
+    return fecha.toDate();
+  }
+
+  if (fecha instanceof Date) {
+    return fecha;
+  }
+
+  if (typeof fecha === "string") {
+    const fechaConvertida = new Date(fecha);
+
+    return Number.isNaN(fechaConvertida.getTime())
+      ? null
+      : fechaConvertida;
+  }
+
+  return null;
+};
+
 export default function ReportesPage() {
+  // =========================================
+  // ESTADOS DE LOS DATOS
+  // =========================================
+
   const [citas, setCitas] = useState([]);
   const [clientes, setClientes] = useState([]);
   const [facturas, setFacturas] = useState([]);
   const [inventario, setInventario] = useState([]);
+  const [pagos, setPagos] = useState([]);
+
+  // =========================================
+  // ESTADOS DE CONTROL
+  // =========================================
+
   const [cargando, setCargando] = useState(true);
-  const { usuario } = useAuth();
-  const fechaActual = new Date();
-  const mesActual = fechaActual.getMonth();
-  const anioActual = fechaActual.getFullYear();
-  const nombresMeses = [
-    "Enero",
-    "Febrero",
-    "Marzo",
-    "Abril",
-    "Mayo",
-    "Junio",
-    "Julio",
-    "Agosto",
-    "Septiembre",
-    "Octubre",
-    "Noviembre",
-    "Diciembre",
-  ];
+  const [error, setError] = useState("");
+
+  const { usuario, cargando: cargandoUsuario } = useAuth();
+
+  // =========================================
+  // CARGAR DATOS
+  // =========================================
 
   useEffect(() => {
+    if (cargandoUsuario) {
+      return;
+    }
+
+    if (!usuario || usuario.rol !== "veterinario") {
+      setCargando(false);
+      setError("No tienes permisos para consultar los reportes.");
+      return;
+    }
+
+    let componenteActivo = true;
+
     const cargarDatos = async () => {
       try {
         setCargando(true);
+        setError("");
+
         const [
           datosCitas,
           datosClientes,
@@ -49,810 +89,843 @@ export default function ReportesPage() {
           obtenerDatosFacturas(),
           obtenerDatosInventario(),
         ]);
+
+        if (!componenteActivo) {
+          return;
+        }
+
         setCitas(datosCitas);
         setClientes(datosClientes);
         setFacturas(datosFacturas);
         setInventario(datosInventario);
+
       } catch (error) {
         console.error(
-          "Error al cargar datos de reportes:",
+          "Error al cargar los reportes:",
           error
         );
+
+        if (componenteActivo) {
+          setError("No fue posible cargar los datos de los reportes.");
+        }
+
       } finally {
-        setCargando(false);
+        if (componenteActivo) {
+          setCargando(false);
+        }
       }
     };
+
     cargarDatos();
-  }, []);
-  const citasDelMes = useMemo(() => {
-    return citas.filter((cita) => {
-      if (!cita.fecha) {
-        return false;
+
+    // =========================================
+    // OBSERVAR PAGOS EN TIEMPO REAL
+    // =========================================
+
+    const cancelarObservacion = observarDatosPagos(
+      (datosPagos) => {
+        if (componenteActivo) {
+          setPagos(datosPagos);
+        }
+      },
+      (error) => {
+        if (componenteActivo) {
+          console.error(
+            "Error al actualizar los pagos:",
+            error
+          );
+          setError("No fue posible actualizar los datos de pagos.");
+        }
       }
+    );
+
+    // =========================================
+    // LIMPIAR SUSCRIPCIÓN
+    // =========================================
+
+    return () => {
+      componenteActivo = false;
+      cancelarObservacion();
+    };
+
+  }, [usuario, cargandoUsuario]);
+
+
+  // =========================================
+  // ESTADÍSTICAS DEL MES ACTUAL
+  // =========================================
+
+  const resumen = useMemo(() => {
+    const ahora = new Date();
+    const mesActual = ahora.getMonth();
+    const anioActual = ahora.getFullYear();
+    const perteneceAlMesActual = (fecha) => {
+      if (!fecha) return false;
+      return (
+        fecha.getMonth() === mesActual &&
+        fecha.getFullYear() === anioActual
+      );
+    };
+
+    // Citas del mes
+    const citasMes = citas.filter((cita) => {
+      if (!cita.fecha) return false;
       const fecha = new Date(`${cita.fecha}T00:00:00`);
       return (
-        fecha.getMonth() === mesActual &&
-        fecha.getFullYear() === anioActual
+        !Number.isNaN(fecha.getTime()) &&
+        perteneceAlMesActual(fecha)
       );
-    });
-  }, [citas, mesActual, anioActual]);
-  const citasCompletadas = citasDelMes.filter(
-    (cita) =>
-      cita.estado?.toLowerCase() === "completada" ||
-      cita.estado?.toLowerCase() === "completado" ||
-      cita.estado?.toLowerCase() === "atendida" ||
-      cita.estado?.toLowerCase() === "atendido"
-  ).length;
-  const citasPendientes = citasDelMes.filter(
-    (cita) =>
-      cita.estado?.toLowerCase() === "pendiente"
-  ).length;
+    }).length;
 
-  const citasCanceladas = citasDelMes.filter(
-    (cita) =>
-      cita.estado?.toLowerCase() === "cancelada" ||
-      cita.estado?.toLowerCase() === "cancelado"
-  ).length;
-  const facturasDelMes = useMemo(() => {
-    return facturas.filter((factura) => {
-      if (!factura.fecha) {
-        return false;
-      }
-      const fecha = new Date(`${factura.fecha}T00:00:00`);
-      return (
-        fecha.getMonth() === mesActual &&
-        fecha.getFullYear() === anioActual
+    // Clientes registrados
+    const totalClientes = clientes.length;
+    // Facturas emitidas durante el mes
+    const facturasMes = facturas.filter((factura) => {
+      const fecha = convertirFecha(
+        factura.fecha || factura.creadoEn
       );
-    });
-  }, [facturas, mesActual, anioActual]);
-  const ingresosDelMes = facturasDelMes.reduce(
-    (total, factura) =>
-      total + (Number(factura.total) || 0),
-    0
-  );
-  const mascotasAtendidas = new Set(
-    citasDelMes
-      .filter((cita) => {
-        const estado =
-          cita.estado?.toLowerCase();
-        return (
-          estado === "completada" ||
-          estado === "completado" ||
-          estado === "atendida" ||
-          estado === "atendido"
-        );
+      return perteneceAlMesActual(fecha);
+    }).length;
+
+    // Ingresos de pagos confirmados durante el mes
+    const ingresosConfirmados = pagos
+      .filter((pago) => {
+        if (pago.estado !== "confirmado") return false;
+        const fecha = convertirFecha(pago.verificadoEn);
+        return perteneceAlMesActual(fecha);
       })
-      .map((cita) => cita.mascota)
-      .filter(Boolean)
-  ).size;
-  const ingresosMensuales = useMemo(() => {
-    const resultado = [];
+      .reduce((total, pago) => {
+        return total + (Number(pago.monto) || 0);
+      }, 0);
+    return {
+      citasMes,
+      totalClientes,
+      facturasMes,
+      ingresosConfirmados,
+    };
 
-    for (let i = 0; i < 12; i++) {
-      const total = facturas
-        .filter((factura) => {
-          if (!factura.fecha) {
-            return false;
-          }
-          const fecha = new Date(
-            `${factura.fecha}T00:00:00`
-          );
-          return (
-            fecha.getMonth() === i &&
-            fecha.getFullYear() === anioActual
-          );
-        })
-        .reduce(
-          (suma, factura) =>
-            suma + (Number(factura.total) || 0),
-          0
-        );
+  }, [citas, clientes, facturas, pagos]);
 
-      resultado.push({
-        mes: nombresMeses[i],
-        total,
+
+  // =========================================
+  // ESTADÍSTICAS DEL ESTADO DE LAS CITAS
+  // =========================================
+
+  const estadisticasCitas = useMemo(() => {
+    const ahora = new Date();
+    const mesActual = ahora.getMonth();
+    const anioActual = ahora.getFullYear();
+    const citasMes = citas.filter((cita) => {
+      if (!cita.fecha) return false;
+      const fecha = new Date(`${cita.fecha}T00:00:00`);
+      return (
+        !Number.isNaN(fecha.getTime()) &&
+        fecha.getMonth() === mesActual &&
+        fecha.getFullYear() === anioActual
+      );
+    });
+
+    const total = citasMes.length;
+    const estados = [
+      {
+        estado: "pendiente",
+        nombre: "Pendientes",
+        color: "bg-yellow-500",
+      },
+      {
+        estado: "confirmada",
+        nombre: "Confirmadas",
+        color: "bg-blue-500",
+      },
+      {
+        estado: "completada",
+        nombre: "Completadas",
+        color: "bg-green-500",
+      },
+      {
+        estado: "cancelada",
+        nombre: "Canceladas",
+        color: "bg-red-500",
+      },
+    ];
+
+    const resultados = estados.map((estado) => {
+      const cantidad = citasMes.filter(
+        (cita) =>
+          String(cita.estado || "").toLowerCase().trim() ===
+          estado.estado
+      ).length;
+
+      return {
+        ...estado,
+        cantidad,
+        porcentaje:
+          total > 0
+            ? (cantidad / total) * 100
+            : 0,
+      };
+    });
+
+    const otros = citasMes.filter((cita) => {
+      const estado = String(cita.estado || "")
+        .toLowerCase()
+        .trim();
+
+      return !estados.some(
+        (item) => item.estado === estado
+      );
+    }).length;
+
+    if (otros > 0) {
+      resultados.push({
+        estado: "otros",
+        nombre: "Otros",
+        color: "bg-gray-500",
+        cantidad: otros,
+        porcentaje: (otros / total) * 100,
       });
     }
-    return resultado;
-  }, [facturas, anioActual]);
 
-  const maxIngreso = Math.max(
-    ...ingresosMensuales.map((mes) => mes.total),
-    1
-  );
-  const serviciosSolicitados = useMemo(() => {
-    const servicios = {};
+    return {
+      total,
+      estados: resultados,
+    };
+  }, [citas]);
 
-    facturasDelMes.forEach((factura) => {
-      factura.items?.forEach((item) => {
-        const nombre = item.producto;
-        if (!nombre) {
+  // =========================================
+// INGRESOS DE LOS ÚLTIMOS 6 MESES
+// =========================================
+
+const ingresosMensuales = useMemo(() => {
+  const ahora = new Date();
+  const meses = [];
+
+  // Generar los últimos 6 meses
+  for (let i = 5; i >= 0; i--) {
+    const fecha = new Date(
+      ahora.getFullYear(),
+      ahora.getMonth() - i,
+      1
+    );
+    meses.push({
+      mes: fecha.toLocaleDateString("es-SV", {
+        month: "short",
+        year: "numeric",
+      }),
+      mesNumero: fecha.getMonth(),
+      anio: fecha.getFullYear(),
+      ingresos: 0,
+    });
+  }
+
+  // Acumular únicamente pagos confirmados
+  pagos.forEach((pago) => {
+    if (pago.estado !== "confirmado") return;
+    const fecha = convertirFecha(pago.verificadoEn);
+    if (!fecha) return;
+    const mesEncontrado = meses.find(
+      (mes) =>
+        mes.mesNumero === fecha.getMonth() &&
+        mes.anio === fecha.getFullYear()
+    );
+    if (mesEncontrado) {
+      mesEncontrado.ingresos += Number(pago.monto) || 0;
+    }
+  });
+  return meses;
+}, [pagos]);
+
+
+  // =========================================
+  // SERVICIOS Y PRODUCTOS MÁS SOLICITADOS
+  // =========================================
+
+  const elementosMasSolicitados = useMemo(() => {
+    const acumulado = {};
+    facturas.forEach((factura) => {
+      if (!Array.isArray(factura.items)) return;
+      factura.items.forEach((item) => {
+        const nombre = String(item.nombre || "").trim();
+        const tipo = String(item.tipo || "").toLowerCase().trim();
+        if (!nombre || !["producto", "servicio"].includes(tipo)) {
           return;
         }
-        if (!servicios[nombre]) {
-          servicios[nombre] = {
+        const clave = `${tipo}-${nombre.toLowerCase()}`;
+        if (!acumulado[clave]) {
+          acumulado[clave] = {
             nombre,
-            cantidad: 0,
-            ingresos: 0,
+            tipo,
+            unidades: 0,
+            vecesFacturado: 0,
+            totalFacturado: 0,
           };
         }
-        servicios[nombre].cantidad +=
-          Number(item.cantidad) || 0;
-
-        servicios[nombre].ingresos +=
-          (Number(item.cantidad) || 0) *
-          (Number(item.precio) || 0);
+        acumulado[clave].unidades += Number(item.cantidad) || 0;
+        acumulado[clave].vecesFacturado += 1;
+        acumulado[clave].totalFacturado += Number(item.subtotal) || 0;
       });
     });
 
-    return Object.values(servicios)
-      .sort((a, b) => b.cantidad - a.cantidad)
+    return Object.values(acumulado)
+      .sort((a, b) => b.unidades - a.unidades)
       .slice(0, 5);
-  }, [facturasDelMes]);
+  }, [facturas]);
 
-  const citasPorVeterinario = useMemo(() => {
-  if (!usuario || usuario.rol !== "veterinario") {
-    return [];
-  }
-  const nombreVeterinario =
-    `${usuario.nombre || ""} ${usuario.apellido || ""}`.trim() ||
-    usuario.correo ||
-    "Veterinario";
-  const total = citasDelMes.length;
-  const atendidas = citasDelMes.filter((cita) => {
-  const estado = cita.estado?.toLowerCase();
+  // =========================================
+// ESTADÍSTICAS DEL INVENTARIO
+// =========================================
 
-    return (
-      estado === "completada" ||
-      estado === "completado" ||
-      estado === "atendida" ||
-      estado === "atendido"
-    );
-  }).length;
+const estadisticasInventario = useMemo(() => {
+  const totalProductos = inventario.length;
+  let totalUnidades = 0;
+  let valorInventario = 0;
+  const categorias = {};
+  inventario.forEach((producto) => {
+    const cantidad = Number(producto.cantidad) || 0;
+    const precio = Number(producto.precio) || 0;
+    totalUnidades += cantidad;
+    valorInventario += cantidad * precio;
+    const categoria = String(
+      producto.categoria || "Sin categoría"
+    ).trim();
+    categorias[categoria] =
+      (categorias[categoria] || 0) + 1;
+  });
 
-  return [
-    {
-      nombre: nombreVeterinario,
-      total,
-      atendidas,
-    },
-  ];
+  const categoriasOrdenadas = Object.entries(categorias)
+    .map(([nombre, cantidad]) => ({
+      nombre,
+      cantidad,
+    }))
+    .sort((a, b) => b.cantidad - a.cantidad);
 
-}, [citasDelMes, usuario]);
+  return {
+    totalProductos,
+    totalUnidades,
+    valorInventario,
+    categoriasOrdenadas,
+  };
+}, [inventario]);
 
-  const inventarioCritico = useMemo(() => {
-    return inventario
-      .map((producto) => {
-        const cantidad =
-          Number(
-            producto.cantidad ??
-            producto.stock ??
-            producto.existencia ??
-            0
-          );
 
-        const minimo =
-          Number(
-            producto.minimo ??
-            producto.stockMinimo ??
-            producto.cantidadMinima ??
-            0
-          );
+  // =========================================
+  // ESTADÍSTICAS DE PAGOS
+  // =========================================
 
-        return {
-          ...producto,
-          cantidad,
-          minimo,
-        };
-      })
-      .filter(
-        (producto) =>
-          producto.cantidad <= producto.minimo
-      )
-      .sort(
-        (a, b) =>
-          a.cantidad - b.cantidad
-      );
-  }, [inventario]);
+  const estadisticasPagos = useMemo(() => {
+    const estados = {
+      confirmado: {
+        cantidad: 0,
+        monto: 0,
+      },
+      pendiente_verificacion: {
+        cantidad: 0,
+        monto: 0,
+      },
+      rechazado: {
+        cantidad: 0,
+        monto: 0,
+      },
+    };
 
-  const formatearFecha = (fecha) => {
-    if (!fecha) {
-      return "-";
-    }
+    pagos.forEach((pago) => {
+      const estado = String(pago.estado || "")
+        .toLowerCase()
+        .trim();
 
-    const partes = fecha.split("-");
+      if (!estados[estado]) return;
 
-    if (partes.length !== 3) {
-      return fecha;
-    }
+      estados[estado].cantidad += 1;
+      estados[estado].monto += Number(pago.monto) || 0;
+    });
 
-    return `${partes[2]}/${partes[1]}/${partes[0]}`;
+    const facturasAtrasadas = facturas.filter(
+      (factura) => factura.estado === "atrasada"
+    ).length;
+
+    return {
+      totalPagos: pagos.length,
+      confirmados: estados.confirmado,
+      pendientes: estados.pendiente_verificacion,
+      rechazados: estados.rechazado,
+      facturasAtrasadas,
+    };
+  }, [pagos, facturas]);
+
+
+  // =========================================
+  // FORMATO DE MONEDA
+  // =========================================
+
+  const formatoMoneda = (cantidad) => {
+    return new Intl.NumberFormat("es-SV", {
+      style: "currency",
+      currency: "USD",
+    }).format(cantidad);
   };
 
-  const imprimirReporte = () => {
-    window.print();
-  };
+  // =========================================
+// IMPRIMIR REPORTES
+// =========================================
 
-  if (cargando) {
+const imprimirReporte = () => {
+  window.print();
+};
+
+  // =========================================
+  // INTERFAZ INICIAL
+  // =========================================
+
+  if (cargandoUsuario || cargando) {
     return (
-      <main>
-        <div className="flex items-center justify-center min-h-[400px]">
-          <div className="text-center">
-            <div className="text-4xl mb-3">
-              📊
-            </div>
-            <p className="text-gray-500">
-              Generando reportes...
-            </p>
+      <main className="flex items-center justify-center min-h-[400px]">
+        <div className="text-center">
+          <div className="text-4xl mb-3">
+            📊
           </div>
+
+          <p className="text-gray-500">
+            Generando reportes...
+          </p>
         </div>
       </main>
     );
   }
 
-  // =====================================================
-  // INTERFAZ
-  // =====================================================
+  if (error) {
+    return (
+      <main className="bg-white rounded-xl shadow-md p-8 text-center">
+        <div className="text-4xl mb-3">
+          ⚠️
+        </div>
+
+        <h2 className="text-xl font-bold text-[#112250]">
+          No se pudieron cargar los reportes
+        </h2>
+
+        <p className="text-gray-500 mt-2">
+          {error}
+        </p>
+      </main>
+    );
+  }
+
+const maximoIngresos = Math.max(
+  1,
+  ...ingresosMensuales.map((mes) => mes.ingresos)
+);
 
   return (
-    <main className="reporte-print">
+  <main className="reporte-print space-y-6">
+  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <div>
+      <h1 className="text-3xl font-bold text-[#112250]">
+        📊 Reportes
+      </h1>
+      <p className="text-gray-500 mt-1">
+        Consulta el resumen de actividad de la
+        Veterinaria San Roque.
+      </p>
+    </div>
 
-      {/* =================================================
-          ESTILOS DE IMPRESIÓN
-      ================================================= */}
+    <button
+    type="button"
+    onClick={imprimirReporte}
+    className="no-print bg-[#112250] hover:bg-[#1b3470] text-white font-medium px-5 py-3 rounded-lg transition-colors">
+    🖨️ Imprimir reportes
+  </button>
+  </div>
 
-      <style jsx global>{`
-        @media print {
-          body {
-            background: white !important;
-          }
+      {/* ========================================= */}
+      {/* RESUMEN GENERAL */}
+      {/* ========================================= */}
 
-          body * {
-            visibility: hidden;
-          }
-
-          .reporte-print,
-          .reporte-print * {
-            visibility: visible;
-          }
-
-          .reporte-print {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            padding: 20px !important;
-          }
-
-          .no-print {
-            display: none !important;
-          }
-
-          .print-card {
-            box-shadow: none !important;
-            border: 1px solid #ddd !important;
-            break-inside: avoid;
-          }
-        }
-      `}</style>
-
-      {/* =================================================
-          ENCABEZADO
-      ================================================= */}
-
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-
-        <div>
-          <h1 className="text-3xl font-bold text-[#112250]">
-            📊 Reportes
-          </h1>
-
-          <p className="text-gray-500 mt-1">
-            Consulta el resumen de actividad de la
-            Veterinaria San Roque
-          </p>
-          <p className="text-sm text-[#E57A3A] font-semibold mt-2">
-            📅 {nombresMeses[mesActual]} {anioActual}
-          </p>
-        </div>
-        <button
-          onClick={imprimirReporte}
-          className="no-print bg-[#112250] hover:bg-[#1b326d] text-white font-semibold px-5 py-3 rounded-lg shadow-md transition"
-        >
-          🖨️ Imprimir reporte
-        </button>
-      </div>
-      {/* =================================================
-          ESTADÍSTICAS
-      ================================================= */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mt-8">
-
-        <div className="print-card bg-white rounded-xl shadow-md p-6 border-l-4 border-[#8FBFE3]">
-          <p className="text-gray-500">
+      <section className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
+        {/* CITAS DEL MES */}
+        <div className="bg-white rounded-xl shadow-md p-5 border-l-4 border-[#E57A3A]">
+          <p className="text-sm text-gray-500">
             Citas del mes
           </p>
           <p className="text-3xl font-bold text-[#112250] mt-2">
-            {citasDelMes.length}
+            {resumen.citasMes}
           </p>
         </div>
-        <div className="print-card bg-white rounded-xl shadow-md p-6 border-l-4 border-[#E57A3A]">
-          <p className="text-gray-500">
-            Clientes
-          </p>
-          <p className="text-3xl font-bold text-[#112250] mt-2">
-            {clientes.length}
-          </p>
-        </div>
-        <div className="print-card bg-white rounded-xl shadow-md p-6 border-l-4 border-[#F6EBC3]">
-          <p className="text-gray-500">
-            Mascotas atendidas
-          </p>
-          <p className="text-3xl font-bold text-[#112250] mt-2">
-            {mascotasAtendidas}
-          </p>
-        </div>
-        <div className="print-card bg-white rounded-xl shadow-md p-6 border-l-4 border-green-400">
-          <p className="text-gray-500">
-            Ingresos del mes
-          </p>
-          <p className="text-3xl font-bold text-[#112250] mt-2">
-            ${ingresosDelMes.toFixed(2)}
-          </p>
-        </div>
-      </div>
 
-      {/* =================================================
-          GRÁFICAS
-      ================================================= */}
+        {/* CLIENTES */}
+        <div className="bg-white rounded-xl shadow-md p-5 border-l-4 border-blue-500">
+          <p className="text-sm text-gray-500">
+            Clientes registrados
+          </p>
+          <p className="text-3xl font-bold text-[#112250] mt-2">
+            {resumen.totalClientes}
+          </p>
+        </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
+        {/* FACTURAS */}
+        <div className="bg-white rounded-xl shadow-md p-5 border-l-4 border-purple-500">
+          <p className="text-sm text-gray-500">
+            Facturas del mes
+          </p>
+          <p className="text-3xl font-bold text-[#112250] mt-2">
+            {resumen.facturasMes}
+          </p>
+        </div>
         {/* INGRESOS */}
-        <div className="print-card bg-white rounded-xl shadow-md p-6">
-          <h2 className="text-xl font-bold text-[#112250]">
-            📈 Ingresos por mes
-          </h2>
-          <p className="text-gray-500 mt-1">
-            Ingresos registrados durante {anioActual}.
+        <div className="bg-white rounded-xl shadow-md p-5 border-l-4 border-green-500">
+          <p className="text-sm text-gray-500">
+            Ingresos confirmados
           </p>
-          <div className="mt-8 flex items-end gap-3 h-64 border-b border-l border-gray-200 px-4 pb-2">
-            {ingresosMensuales.map((mes) => {
-              const altura =
-                mes.total > 0
-                  ? Math.max(
-                      (mes.total / maxIngreso) * 100,
-                      5
-                    )
-                  : 2;
-              return (
-                <div
-                  key={mes.mes}
-                  className="flex-1 h-full flex flex-col justify-end items-center"
-                >
-                  <div className="text-xs text-gray-500 mb-2">
-                    {mes.total > 0
-                      ? `$${mes.total.toFixed(0)}`
-                      : ""}
-                  </div>
-                  <div
-                    className="w-full max-w-8 bg-[#8FBFE3] rounded-t-md hover:bg-[#E57A3A] transition"
-                    style={{
-                      height: `${altura}%`,
-                    }}
-                    title={`${mes.mes}: $${mes.total.toFixed(2)}`}
-                  />
-                  <span className="text-[10px] text-gray-500 mt-2">
-                    {mes.mes.substring(0, 3)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* CITAS */}
-        <div className="print-card bg-white rounded-xl shadow-md p-6">
-
-          <h2 className="text-xl font-bold text-[#112250]">
-            📅 Estado de las citas
-          </h2>
-          <p className="text-gray-500 mt-1">
-            Distribución de las citas del mes.
+          <p className="text-2xl font-bold text-[#112250] mt-2">
+            {formatoMoneda(resumen.ingresosConfirmados)}
           </p>
-          <div className="mt-8 space-y-6">
-            <div>
-              <div className="flex justify-between mb-2">
-                <span className="text-gray-600">
-                  Completadas
-                </span>
-                <span className="font-bold text-green-600">
-                  {citasCompletadas}
-                </span>
-              </div>
-              <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-green-400 rounded-full"
-                  style={{
-                    width: `${
-                      citasDelMes.length
-                        ? (citasCompletadas /
-                            citasDelMes.length) *
-                          100
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
-            </div>
 
-            <div>
-              <div className="flex justify-between mb-2">
-                <span className="text-gray-600">
-                  Pendientes
-                </span>
-                <span className="font-bold text-[#E57A3A]">
-                  {citasPendientes}
-                </span>
-              </div>
-
-              <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-[#E57A3A] rounded-full"
-                  style={{
-                    width: `${
-                      citasDelMes.length
-                        ? (citasPendientes /
-                            citasDelMes.length) *
-                          100
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between mb-2">
-                <span className="text-gray-600">
-                  Canceladas
-                </span>
-                <span className="font-bold text-red-600">
-                  {citasCanceladas}
-                </span>
-              </div>
-
-              <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-red-400 rounded-full"
-                  style={{
-                    width: `${
-                      citasDelMes.length
-                        ? (citasCanceladas /
-                            citasDelMes.length) *
-                          100
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
-            </div>
-          </div>
+          <p className="text-xs text-gray-400 mt-1">
+            Durante el mes actual
+          </p>
         </div>
-      </div>
+      </section>
 
-      {/* =================================================
-          SERVICIOS MÁS SOLICITADOS
-      ================================================= */}
+      {/* ========================================= */}
+      {/* ESTADO DE LAS CITAS */}
+      {/* ========================================= */}
 
-      <div className="print-card bg-white rounded-xl shadow-md p-6 mt-6">
-        <h2 className="text-xl font-bold text-[#112250]">
-          🛒 Servicios y productos más solicitados
-        </h2>
-        <p className="text-gray-500 mt-1">
-          Elementos con mayor cantidad de unidades
-          registradas en las facturas del mes.
-        </p>
-
-        {serviciosSolicitados.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            No hay información de facturación para
-            este mes.
-          </div>
-        ) : (
-          <div className="mt-6 space-y-5">
-            {serviciosSolicitados.map(
-              (servicio, indice) => {
-
-                const maxCantidad =
-                  serviciosSolicitados[0].cantidad;
-
-                const porcentaje =
-                  maxCantidad > 0
-                    ? (servicio.cantidad /
-                        maxCantidad) *
-                      100
-                    : 0;
-                return (
-                  <div key={servicio.nombre}>
-                    <div className="flex justify-between mb-2">
-                      <div className="flex items-center gap-3">
-                        <span className="w-7 h-7 rounded-full bg-[#112250] text-white flex items-center justify-center text-sm font-bold">
-                          {indice + 1}
-                        </span>
-                        <span className="font-semibold text-gray-700">
-                          {servicio.nombre}
-                        </span>
-                      </div>
-
-                      <div className="text-right">
-                        <span className="font-bold text-[#112250]">
-                          {servicio.cantidad}
-                        </span>
-                        <span className="text-gray-400 text-sm ml-1">
-                          unidades
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-[#8FBFE3] rounded-full"
-                        style={{
-                          width: `${porcentaje}%`,
-                        }}
-                      />
-                    </div>
-                    <p className="text-right text-sm text-gray-500 mt-1">
-                      ${servicio.ingresos.toFixed(2)}
-                    </p>
-                  </div>
-                );
-              }
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* =================================================
-          TABLAS
-      ================================================= */}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-        {/* INGRESOS POR MES */}
-        <div className="print-card bg-white rounded-xl shadow-md overflow-hidden">
-          <div className="p-6 border-b">
-            <h2 className="text-xl font-bold text-[#112250]">
-              💰 Ingresos por mes
-            </h2>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="text-left p-4 text-sm font-semibold text-[#112250]">
-                    Mes
-                  </th>
-                  <th className="text-right p-4 text-sm font-semibold text-[#112250]">
-                    Ingresos
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-
-                {ingresosMensuales.map(
-                  (mes) => (
-                    <tr
-                      key={mes.mes}
-                      className="border-t"
-                    >
-
-                      <td className="p-4 text-gray-600">
-                        {mes.mes}
-                      </td>
-
-                      <td className="p-4 text-right font-semibold text-[#112250]">
-                        ${mes.total.toFixed(2)}
-                      </td>
-
-                    </tr>
-                  )
-                )}
-
-              </tbody>
-
-            </table>
-
-          </div>
-
-        </div>
-
-        {/* CITAS POR VETERINARIO */}
-
-        <div className="print-card bg-white rounded-xl shadow-md overflow-hidden">
-
-          <div className="p-6 border-b">
-
-            <h2 className="text-xl font-bold text-[#112250]">
-              👨‍⚕️ Citas atendidas por veterinario
-            </h2>
-
-          </div>
-
-          <div className="overflow-x-auto">
-
-            <table className="w-full">
-
-              <thead className="bg-gray-50">
-
-                <tr>
-
-                  <th className="text-left p-4 text-sm font-semibold text-[#112250]">
-                    Veterinario
-                  </th>
-
-                  <th className="text-center p-4 text-sm font-semibold text-[#112250]">
-                    Citas
-                  </th>
-
-                  <th className="text-center p-4 text-sm font-semibold text-[#112250]">
-                    Atendidas
-                  </th>
-
-                </tr>
-
-              </thead>
-
-              <tbody>
-
-                {citasPorVeterinario.length === 0 ? (
-
-                  <tr>
-
-                    <td
-                      colSpan="3"
-                      className="p-6 text-center text-gray-500"
-                    >
-                      No hay citas registradas
-                      este mes.
-                    </td>
-
-                  </tr>
-
-                ) : (
-
-                  citasPorVeterinario.map(
-                    (veterinario) => (
-                      <tr
-                        key={veterinario.nombre}
-                        className="border-t"
-                      >
-
-                        <td className="p-4 font-semibold text-gray-700">
-                          {veterinario.nombre}
-                        </td>
-
-                        <td className="p-4 text-center text-gray-600">
-                          {veterinario.total}
-                        </td>
-
-                        <td className="p-4 text-center">
-
-                          <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-semibold">
-                            {veterinario.atendidas}
-                          </span>
-
-                        </td>
-
-                      </tr>
-                    )
-                  )
-
-                )}
-
-              </tbody>
-
-            </table>
-
-          </div>
-
-        </div>
-
-      </div>
-
-      {/* =================================================
-          INVENTARIO CRÍTICO
-      ================================================= */}
-
-      <div className="print-card bg-white rounded-xl shadow-md mt-6 overflow-hidden">
-
-        <div className="p-6 border-b flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-
+      <section className="bg-white rounded-xl shadow-md p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-6">
           <div>
-
             <h2 className="text-xl font-bold text-[#112250]">
-              ⚠️ Inventario crítico
+              Estado de las citas
             </h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Distribución de las citas del mes actual.
+            </p>
+          </div>
+          <div className="text-sm text-gray-500">
+            Total:{" "}
+            <span className="font-bold text-[#112250]">
+              {estadisticasCitas.total}
+            </span>
+          </div>
+        </div>
 
-            <p className="text-gray-500 mt-1">
-              Productos que necesitan reposición.
+        <div className="space-y-5">
+          {estadisticasCitas.estados.map((estado) => (
+            <div key={estado.estado}>
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium text-gray-700">
+                  {estado.nombre}
+                </span>
+                <span className="text-sm font-semibold text-[#112250]">
+                  {estado.cantidad} ({estado.porcentaje.toFixed(1)}%)
+                </span>
+              </div>
+              <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden">
+                <div
+                  className={`${estado.color} h-3 rounded-full transition-all duration-500`}
+                  style={{
+                    width: `${estado.porcentaje}%`,
+                  }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {estadisticasCitas.total === 0 && (
+          <p className="text-center text-sm text-gray-400 mt-5">
+            No hay citas registradas durante este mes.
+          </p>
+        )}
+      </section>
+
+
+{/* ========================================= */}
+{/* INGRESOS DE LOS ÚLTIMOS 6 MESES */}
+{/* ========================================= */}
+
+<section className="bg-white rounded-xl shadow-md p-6">
+  <div className="mb-6">
+    <h2 className="text-xl font-bold text-[#112250]">
+      Ingresos de los últimos 6 meses
+    </h2>
+
+    <p className="text-sm text-gray-500 mt-1">
+      Evolución mensual de los pagos confirmados.
+    </p>
+  </div>
+
+  <div className="space-y-5">
+    {ingresosMensuales.map((mes) => (
+      <div key={`${mes.anio}-${mes.mesNumero}`}>
+        <div className="flex justify-between items-center mb-2 gap-3">
+          <span className="text-sm font-medium text-gray-700 capitalize">
+            {mes.mes}
+          </span>
+          <span className="text-sm font-semibold text-[#112250]">
+            {formatoMoneda(mes.ingresos)}
+          </span>
+        </div>
+        <div className="w-full bg-gray-100 rounded-full h-4 overflow-hidden">
+          <div
+            className="bg-[#E57A3A] h-4 rounded-full transition-all duration-500"
+            style={{
+              width: `${(mes.ingresos / maximoIngresos) * 100}%`,
+            }}
+          />
+        </div>
+      </div>
+    ))}
+  </div>
+
+  {ingresosMensuales.every((mes) => mes.ingresos === 0) && (
+    <p className="text-center text-sm text-gray-400 mt-5">
+      Todavía no hay ingresos confirmados durante este período.
+    </p>
+  )}
+</section>
+
+
+      {/* ========================================= */}
+      {/* ESTADÍSTICAS DE PAGOS */}
+      {/* ========================================= */}
+
+      <section className="bg-white rounded-xl shadow-md p-6">
+        <div className="mb-6">
+          <h2 className="text-xl font-bold text-[#112250]">
+            Estadísticas de pagos
+          </h2>
+
+          <p className="text-sm text-gray-500 mt-1">
+            Resumen de los pagos registrados y su estado actual.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+
+          {/* PAGOS CONFIRMADOS */}
+          <div className="bg-green-50 rounded-lg p-4">
+            <p className="text-sm text-gray-500">
+              Pagos confirmados
             </p>
 
+            <p className="text-2xl font-bold text-green-700 mt-2">
+              {estadisticasPagos.confirmados.cantidad}
+            </p>
+
+            <p className="text-sm font-medium text-green-700 mt-1">
+              {formatoMoneda(estadisticasPagos.confirmados.monto)}
+            </p>
           </div>
 
-          <span className="bg-red-100 text-red-700 px-4 py-2 rounded-full text-sm font-semibold">
-            {inventarioCritico.length} producto
-            {inventarioCritico.length !== 1
-              ? "s"
-              : ""}
-          </span>
+          {/* PAGOS PENDIENTES */}
+          <div className="bg-yellow-50 rounded-lg p-4">
+            <p className="text-sm text-gray-500">
+              Pendientes de verificación
+            </p>
+
+            <p className="text-2xl font-bold text-yellow-700 mt-2">
+              {estadisticasPagos.pendientes.cantidad}
+            </p>
+
+            <p className="text-sm font-medium text-yellow-700 mt-1">
+              {formatoMoneda(estadisticasPagos.pendientes.monto)}
+            </p>
+          </div>
+
+          {/* PAGOS RECHAZADOS */}
+          <div className="bg-red-50 rounded-lg p-4">
+            <p className="text-sm text-gray-500">
+              Pagos rechazados
+            </p>
+
+            <p className="text-2xl font-bold text-red-700 mt-2">
+              {estadisticasPagos.rechazados.cantidad}
+            </p>
+
+            <p className="text-sm font-medium text-red-700 mt-1">
+              {formatoMoneda(estadisticasPagos.rechazados.monto)}
+            </p>
+          </div>
+
+          {/* FACTURAS ATRASADAS */}
+          <div className="bg-orange-50 rounded-lg p-4">
+            <p className="text-sm text-gray-500">
+              Facturas atrasadas
+            </p>
+
+            <p className="text-2xl font-bold text-orange-700 mt-2">
+              {estadisticasPagos.facturasAtrasadas}
+            </p>
+
+            <p className="text-xs text-gray-500 mt-1">
+              Según el estado de facturación
+            </p>
+          </div>
 
         </div>
 
-        {inventarioCritico.length === 0 ? (
-          <div className="p-8 text-center">
-            <div className="text-4xl mb-2">
-              ✅
-            </div>
-            <p className="font-semibold text-green-600">
-              No hay productos en nivel crítico.
-            </p>
-          </div>
+        <div className="mt-5 pt-4 border-t border-gray-100">
+          <p className="text-sm text-gray-500">
+            Total de registros de pagos:{" "}
+            <span className="font-bold text-[#112250]">
+              {estadisticasPagos.totalPagos}
+            </span>
+          </p>
+        </div>
+      </section>
 
-        ) : (
+      {/* ========================================= */}
+      {/* SERVICIOS Y PRODUCTOS MÁS SOLICITADOS */}
+      {/* ========================================= */}
+      <section className="bg-white rounded-xl shadow-md p-6">
+        <div className="mb-6">
+          <h2 className="text-xl font-bold text-[#112250]">
+            Servicios y productos más solicitados
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Los cinco elementos con mayor cantidad facturada.
+          </p>
+        </div>
+        {elementosMasSolicitados.length > 0 ? (
           <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-gray-50">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-gray-50 text-gray-600">
                 <tr>
-                  <th className="text-left p-4 text-sm font-semibold text-[#112250]">
-                    Producto
-                  </th>
-                  <th className="text-center p-4 text-sm font-semibold text-[#112250]">
-                    Existencia
-                  </th>
-                  <th className="text-center p-4 text-sm font-semibold text-[#112250]">
-                    Mínimo
-                  </th>
-                  <th className="text-center p-4 text-sm font-semibold text-[#112250]">
-                    Estado
-                  </th>
+                  <th className="px-4 py-3">Elemento</th>
+                  <th className="px-4 py-3">Tipo</th>
+                  <th className="px-4 py-3 text-center">Unidades</th>
+                  <th className="px-4 py-3 text-center">Veces facturado</th>
+                  <th className="px-4 py-3 text-right">Total facturado</th>
                 </tr>
               </thead>
-              <tbody>
-                {inventarioCritico.map(
-                  (producto) => {
-                    const nombre =
-                      producto.nombre ||
-                      producto.producto ||
-                      producto.descripcion ||
-                      "Producto";
-                    return (
-                      <tr
-                        key={producto.id}
-                        className="border-t"
-                      >
-                        <td className="p-4 font-semibold text-gray-700">
-                          {nombre}
-                        </td>
-                        <td className="p-4 text-center font-bold text-red-600">
-                          {producto.cantidad}
-                        </td>
-                        <td className="p-4 text-center text-gray-600">
-                          {producto.minimo}
-                        </td>
-                        <td className="p-4 text-center">
-                          <span className="bg-red-100 text-red-700 px-3 py-1 rounded-full text-sm font-semibold">
-                            Reponer
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  }
-                )}
+              <tbody className="divide-y divide-gray-100">
+                {elementosMasSolicitados.map((item) => (
+                  <tr key={`${item.tipo}-${item.nombre}`}>
+                    <td className="px-4 py-3 font-medium text-[#112250]">
+                      {item.nombre}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        item.tipo === "producto"
+                          ? "bg-blue-100 text-blue-700"
+                          : "bg-purple-100 text-purple-700"
+                      }`}>
+                        {item.tipo === "producto" ? "Producto" : "Servicio"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {item.unidades}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {item.vecesFacturado}
+                    </td>
+                    <td className="px-4 py-3 text-right font-semibold">
+                      {formatoMoneda(item.totalFacturado)}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
+        ) : (
+          <p className="text-center text-sm text-gray-400 py-6">
+            Todavía no hay elementos registrados en las facturas.
+          </p>
         )}
-      </div>
+      </section>
+
+
+      {/* ========================================= */}
+      {/* ESTADÍSTICAS DEL INVENTARIO */}
+      {/* ========================================= */}
+
+      <section className="bg-white rounded-xl shadow-md p-6">
+        <div className="mb-6">
+          <h2 className="text-xl font-bold text-[#112250]">
+            Estadísticas del inventario
+          </h2>
+          <p className="text-sm text-gray-500 mt-1">
+            Resumen de productos, existencias y categorías registradas.
+          </p>
+        </div>
+
+        {/* RESUMEN DEL INVENTARIO */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+
+          <div className="bg-blue-50 rounded-lg p-4">
+            <p className="text-sm text-gray-500">
+              Productos registrados
+            </p>
+            <p className="text-2xl font-bold text-[#112250] mt-2">
+              {estadisticasInventario.totalProductos}
+            </p>
+          </div>
+          <div className="bg-orange-50 rounded-lg p-4">
+            <p className="text-sm text-gray-500">
+              Unidades disponibles
+            </p>
+            <p className="text-2xl font-bold text-[#112250] mt-2">
+              {estadisticasInventario.totalUnidades}
+            </p>
+          </div>
+          <div className="bg-green-50 rounded-lg p-4">
+            <p className="text-sm text-gray-500">
+              Valor del inventario
+            </p>
+            <p className="text-2xl font-bold text-[#112250] mt-2">
+              {formatoMoneda(estadisticasInventario.valorInventario)}
+            </p>
+          </div>
+        </div>
+        {/* DISTRIBUCIÓN POR CATEGORÍAS */}
+        <div>
+          <h3 className="text-lg font-semibold text-[#112250] mb-4">
+            Productos por categoría
+          </h3>
+          {estadisticasInventario.categoriasOrdenadas.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm text-left">
+                <thead className="bg-gray-50 text-gray-600">
+                  <tr>
+                    <th className="px-4 py-3">Categoría</th>
+                    <th className="px-4 py-3 text-center">
+                      Productos
+                    </th>
+                    <th className="px-4 py-3 text-right">
+                      Porcentaje
+                    </th>
+                  </tr>
+                </thead>
+
+                <tbody className="divide-y divide-gray-100">
+                  {estadisticasInventario.categoriasOrdenadas.map(
+                    (categoria) => (
+                      <tr key={categoria.nombre}>
+                        <td className="px-4 py-3 font-medium text-[#112250]">
+                          {categoria.nombre}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {categoria.cantidad}
+                        </td>
+                        <td className="px-4 py-3 text-right font-semibold">
+                          {(
+                            (categoria.cantidad /
+                              estadisticasInventario.totalProductos) * 100
+                          ).toFixed(1)}%
+                        </td>
+                      </tr>
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-center text-sm text-gray-400 py-6">
+              Todavía no hay productos registrados en el inventario.
+            </p>
+          )}
+        </div>
+      </section>
+
     </main>
   );
 }

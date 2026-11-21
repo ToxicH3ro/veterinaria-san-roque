@@ -46,6 +46,17 @@ export default function Sidebar() {
       <nav className="flex flex-col gap-3">
 
         <p className="text-sm font-semibold uppercase text-white/60 mb-1">
+          Perfil
+        </p>
+
+        <Link
+          href="/perfil"
+          className="bg-white/10 hover:bg-[#E57A3A] hover:text-[#112250] text-white font-semibold py-3 px-4 rounded-lg transition"
+        >
+          👤 Perfil
+        </Link>
+
+        <p className="text-sm font-semibold uppercase text-white/60 mb-1">
           Operaciones
         </p>
 
@@ -125,10 +136,8 @@ export default function Sidebar() {
           </>
         )}
 
-      </nav>
-
       {/* Usuario y cerrar sesión */}
-      <div className="mt-auto pt-6 border-t border-white/20">
+        <div className="mt-auto pt-6 border-t border-white/20">
 
         <div className="mb-4">
 
@@ -154,6 +163,8 @@ export default function Sidebar() {
         </button>
 
       </div>
+
+      </nav>
 
     </aside>
   );

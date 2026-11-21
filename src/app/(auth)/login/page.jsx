@@ -3,13 +3,20 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { iniciarSesion } from "@/services/authService";
+import {
+  iniciarSesion,
+  iniciarSesionConGoogle,
+  iniciarSesionConFacebook,
+  vincularFacebookConGoogle,
+  hayCredencialFacebookPendiente,
+} from "@/services/authService";
 
 export default function LoginPage() {
   const [correo, setCorreo] = useState("");
   const [contrasena, setContrasena] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [cargando, setCargando] = useState(false);
+  const [facebookPendiente, setFacebookPendiente] = useState(false);
 
   const router = useRouter();
 
@@ -31,6 +38,84 @@ export default function LoginPage() {
     setCargando(false);
   }
   };
+
+  const handleGoogleLogin = async () => {
+  setMensaje("");
+  setCargando(true);
+
+  try {
+    await iniciarSesionConGoogle();
+
+    // Si existe una credencial de Facebook pendiente,
+    // vincularla con la cuenta autenticada de Google.
+    if (hayCredencialFacebookPendiente()) {
+      await vincularFacebookConGoogle();
+      setFacebookPendiente(false);
+
+      console.log("Facebook vinculado correctamente con Google.");
+    }
+    router.push("/inicio");
+  } catch (error) {
+    console.error("Error al iniciar sesión con Google:", error);
+
+    if (error.code === "auth/popup-closed-by-user") {
+      setMensaje("Se canceló el inicio de sesión con Google.");
+    } else if (error.code === "auth/popup-blocked") {
+      setMensaje("El navegador bloqueó la ventana de Google.");
+    } else if (error.code === "auth/credential-already-in-use") {
+      setMensaje("Esta cuenta de Facebook ya está vinculada a otra cuenta.");
+    } else if (error.code === "auth/provider-already-linked") {
+      setMensaje("Facebook ya está vinculado a esta cuenta.");
+    } else {
+      setMensaje(
+        error.message || "No se pudo completar el inicio de sesión."
+      );
+    }
+
+  } finally {
+    setCargando(false);
+  }
+};
+
+  // =====================================================
+  // INICIAR SESIÓN CON FACEBOOK
+  // =====================================================
+
+  const handleFacebookLogin = async () => {
+  setMensaje("");
+  setCargando(true);
+
+  try {
+    await iniciarSesionConFacebook();
+    setFacebookPendiente(false);
+
+    router.push("/inicio");
+
+  } catch (error) {
+    console.error("Error al iniciar sesión con Facebook:", error);
+    if (error.code === "auth/popup-closed-by-user") {
+      setMensaje("Se canceló el inicio de sesión con Facebook.");
+    } else if (error.code === "auth/popup-blocked") {
+      setMensaje("El navegador bloqueó la ventana de Facebook.");
+    } else if (error.code === "auth/account-exists-with-different-credential") {
+
+      setFacebookPendiente(hayCredencialFacebookPendiente());
+
+      setMensaje(
+        "Ya existe una cuenta con este correo. Continúa con Google para vincular tu cuenta de Facebook."
+      );
+
+    } else if (error.code === "auth/operation-not-allowed") {
+      setMensaje("El inicio de sesión con Facebook no está habilitado.");
+
+    } else {
+      setMensaje("No se pudo iniciar sesión con Facebook.");
+    }
+
+  } finally {
+    setCargando(false);
+  }
+};
 
   return (
     <main className="min-h-screen bg-[#8FBFE3] flex items-center justify-center px-4">
@@ -126,6 +211,53 @@ export default function LoginPage() {
             >
               {cargando ? "Iniciando sesión..." : "🐾 Iniciar sesión"}
             </button>
+
+            {/* Boton Google */}
+            <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 border-t border-gray-300"></div>
+
+            <span className="text-sm text-gray-400">
+            O continúa con
+            </span>
+
+          <div className="flex-1 border-t border-gray-300"></div>
+          </div>
+
+          {/* GOOGLE */}
+          <button
+          type="button"
+          onClick={handleGoogleLogin}
+          disabled={cargando}
+          className="w-full flex items-center justify-center gap-3 border border-gray-300 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed text-gray-700 font-semibold py-3 rounded-lg transition"
+          >
+        <img
+        src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg"
+        alt="Google"
+        className="w-5 h-5"
+        />
+{cargando
+  ? "Conectando..."
+  : facebookPendiente
+    ? "Continuar con Google y vincular Facebook"
+    : "Continuar con Google"}
+</button>
+
+
+{/* FACEBOOK */}
+<button
+  type="button"
+  onClick={handleFacebookLogin}
+  disabled={cargando}
+  className="w-full flex items-center justify-center gap-3 border border-gray-300 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed text-gray-700 font-semibold py-3 rounded-lg transition"
+>
+  <img
+    src="https://upload.wikimedia.org/wikipedia/commons/b/b9/2023_Facebook_icon.svg"
+    alt="Facebook"
+    className="w-5 h-5"
+  />
+
+  {cargando ? "Conectando..." : "Continuar con Facebook"}
+</button>
 
           </form>
 

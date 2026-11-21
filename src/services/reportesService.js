@@ -1,7 +1,9 @@
 import {
   collection,
   getDocs,
+  onSnapshot,
 } from "firebase/firestore";
+
 
 import { db } from "@/lib/firebase";
 
@@ -10,7 +12,6 @@ import { db } from "@/lib/firebase";
 // =====================================================
 
 export const obtenerDatosCitas = async () => {
-
   const snapshot = await getDocs(
     collection(db, "citas")
   );
@@ -24,6 +25,7 @@ export const obtenerDatosCitas = async () => {
 // =====================================================
 // OBTENER CLIENTES
 // =====================================================
+
 export const obtenerDatosClientes = async () => {
   const snapshot = await getDocs(
     collection(db, "usuarios")
@@ -37,7 +39,6 @@ export const obtenerDatosClientes = async () => {
     .filter(
       (usuario) => usuario.rol === "usuario"
     );
-
 };
 
 // =====================================================
@@ -45,7 +46,6 @@ export const obtenerDatosClientes = async () => {
 // =====================================================
 
 export const obtenerDatosFacturas = async () => {
-
   const snapshot = await getDocs(
     collection(db, "facturas")
   );
@@ -64,9 +64,44 @@ export const obtenerDatosInventario = async () => {
   const snapshot = await getDocs(
     collection(db, "inventario")
   );
+
   return snapshot.docs.map((documento) => ({
     id: documento.id,
     ...documento.data(),
   }));
+};
 
+// =====================================================
+// OBSERVAR PAGOS EN TIEMPO REAL
+// =====================================================
+
+export const observarDatosPagos = (
+  alActualizar,
+  alError
+) => {
+  const referenciaPagos = collection(db, "pagos");
+
+  const cancelarObservacion = onSnapshot(
+    referenciaPagos,
+    (snapshot) => {
+      const pagos = snapshot.docs.map((documento) => ({
+        id: documento.id,
+        ...documento.data(),
+      }));
+
+      alActualizar(pagos);
+    },
+    (error) => {
+      console.error(
+        "Error al observar los pagos:",
+        error
+      );
+
+      if (alError) {
+        alError(error);
+      }
+    }
+  );
+
+  return cancelarObservacion;
 };

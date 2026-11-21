@@ -11,3 +11,49 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* =========================================
+   CONFIGURACIÓN DE IMPRESIÓN DE REPORTES
+========================================= */
+
+ @media print {
+
+  @page {
+    size: auto;
+    margin: 12mm;
+  }
+
+  /* Conservar colores y fondos */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Ocultar toda la interfaz */
+  body * {
+    visibility: hidden !important;
+  }
+
+  /* Mostrar exclusivamente los reportes */
+  .reporte-print,
+  .reporte-print * {
+    visibility: visible !important;
+  }
+
+  /* Colocar los reportes desde el inicio */
+  .reporte-print {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Ocultar botones */
+  .no-print {
+    display: none !important;
+  }
+}
